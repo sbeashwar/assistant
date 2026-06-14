@@ -1,0 +1,45 @@
+# Bytes that must NEVER be committed.
+# Belt and suspenders: every secret pattern listed, plus broad denies for
+# common envelope types (.env, .token_cache, credentials, etc.).
+
+# === SECRETS ===
+*.env
+*.env.*
+!.env.example
+.env.local
+.token_cache/
+push_config.json
+**/*token_cache*.json
+**/*credentials*.json
+**/*secret*
+**/*.pem
+**/*.pfx
+**/*.key
+**/*.p12
+device_code.txt
+
+# === STATE / LOGS / CACHES (not secret, but personal) ===
+state.json
+logs/
+*.log
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# === DEPENDENCIES ===
+node_modules/
+venv/
+.venv/
+
+# === SCHEDULED TASK STATE (XML may include user SID) ===
+scheduled-tasks/*.local.xml
+
+# === EDITOR / OS ===
+.vscode/settings.local.json
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Anything matching this name is hand-staged, never committed ===
+PERSONAL/
+private/

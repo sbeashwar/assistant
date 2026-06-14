@@ -1,0 +1,13 @@
+{
+  "name": "assistant-local-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^5.1.2",
+    "express": "^4.21.0"
+  }
+}
