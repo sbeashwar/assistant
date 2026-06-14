@@ -22,7 +22,6 @@ import logging
 import re
 import subprocess
 import sys
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -52,39 +51,19 @@ ALLOWED_TOOLS = (
     "Bash,Read,Glob,Grep,WebSearch,WebFetch"
 )
 
-# Each reminder gets a stable session-id (UUIDv5 of its slug) so claude -p
-# resumes the SAME on-disk session every hour instead of creating a new one.
-# Pros:
-#   - The VS Code session-list stays clean: 1 entry per active reminder
-#     forever, named after the reminder ("Reminder: ..." from the first prompt
-#     line), regardless of how many ticks fire.
-#   - The judge inherits "last tick I saw X" context from the prior session
-#     turns, which sharpens the "has anything NEW arrived?" decision.
-# Sessions for oneshot reminders that have fired are cleaned up — see
-# delete_session_jsonl() below.
-_REMINDER_SESSION_NAMESPACE = uuid.UUID("a8c79b51-8a3f-4bcb-8a7e-2f5e5f4a3b21")
-
-
-def session_id_for(reminder_id: str) -> str:
-    return str(uuid.uuid5(_REMINDER_SESSION_NAMESPACE, f"reminder:{reminder_id}"))
-
-
-def delete_session_jsonl(session_id: str) -> bool:
-    """Delete the session's on-disk JSONL transcript. Used when a oneshot fires.
-    Returns True if a file was removed."""
-    projects_dir = Path.home() / ".claude" / "projects"
-    if not projects_dir.exists():
-        return False
-    # Encoding of cwd to project-dir name varies by claude version; glob to be safe.
-    removed = False
-    for f in projects_dir.glob(f"*/{session_id}.jsonl"):
-        try:
-            f.unlink()
-            log.info(f"  cleaned up session file: {f}")
-            removed = True
-        except Exception as e:
-            log.warning(f"  could not delete session file {f}: {e}")
-    return removed
+# All reminder judgments share ONE on-disk claude session, deterministic UUID.
+# Why one shared session instead of one-per-reminder:
+#   - Session list stays at exactly 1 entry ("Reminders") forever, no matter
+#     how many reminders exist or how many ticks fire. Clean.
+#   - The judge sees prior-tick context across all reminders. Mostly helpful
+#     ("I already checked email this tick for reminder A, here's what was
+#     there") — the prompt always names which reminder it's judging now.
+#   - Single JSONL grows over time but only one file to manage.
+# The session is NEVER deleted — it's a long-lived workhorse like the
+# AssistantKeepAlive task. If it grows too large, delete it manually and
+# the next tick creates a fresh one with the same ID.
+SHARED_SESSION_ID = "a8c79b51-8a3f-4bcb-8a7e-2f5e5f4a3b21"
+SHARED_SESSION_NAME = "Reminders"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -210,8 +189,8 @@ def judge_reminder(reminder: dict) -> Optional[dict]:
     cmd = [
         CLAUDE_PATH,
         "-p",
-        "--session-id", reminder["session_id"],
-        "--name", f"Reminder: {reminder['title']}"[:80],
+        "--session-id", SHARED_SESSION_ID,
+        "--name", SHARED_SESSION_NAME,
         "--mcp-config", str(MCP_CONFIG_PATH),
         "--allowedTools", ALLOWED_TOOLS,
         "--dangerously-skip-permissions",
@@ -283,7 +262,6 @@ def load_active_reminders() -> list[dict]:
             "notify_title": meta.get("notify_title", meta.get("title", "Reminder")),
             "notify_url": meta.get("notify_url", "/"),
             "trigger_text": trigger_text,
-            "session_id": session_id_for(meta.get("id", f.stem)),
             "meta": meta,
             "body": body,
         })
@@ -291,21 +269,15 @@ def load_active_reminders() -> list[dict]:
 
 
 def update_reminder(reminder: dict, *, fired: bool):
-    """Bump last_checked_iso; set status=done if fired and mode=oneshot.
-    For oneshot reminders that just transitioned to done, also delete the
-    on-disk claude session — it'll never be judged again, so the JSONL is
-    dead weight in the user's session list."""
+    """Bump last_checked_iso; set status=done if fired and mode=oneshot."""
     meta = reminder["meta"]
     meta["last_checked_iso"] = now_iso()
-    became_done = fired and reminder["mode"] == "oneshot"
-    if became_done:
+    if fired and reminder["mode"] == "oneshot":
         meta["status"] = "done"
     reminder["path"].write_text(
         serialize_frontmatter(meta, reminder["body"]),
         encoding="utf-8",
     )
-    if became_done:
-        delete_session_jsonl(reminder["session_id"])
 
 
 def main():
