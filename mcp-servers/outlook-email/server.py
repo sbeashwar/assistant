@@ -17,7 +17,7 @@ import os
 import sys
 import asyncio
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -33,7 +33,7 @@ CONFIG_PATH = SERVER_DIR / "config.json"
 TOKEN_CACHE_PATH = SERVER_DIR / ".token_cache" / "token_cache.json"
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-SCOPES = ["Mail.Read", "Mail.ReadWrite", "Mail.Send"]
+SCOPES = ["Mail.Read", "Mail.ReadWrite", "Mail.Send", "Calendars.Read"]
 
 
 def _load_config() -> dict:
@@ -401,6 +401,115 @@ async def mark_as_read(message_ids: list[str], is_read: bool = True) -> str:
         except Exception as e:
             results.append({"id": mid, "status": "error", "error": str(e)})
     return json.dumps(results, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Calendar tools (Calendars.Read scope)
+# ---------------------------------------------------------------------------
+
+
+def _format_event(evt: dict) -> dict:
+    """Extract key fields from a Graph calendar event."""
+    attendees = []
+    for a in evt.get("attendees", []) or []:
+        addr = a.get("emailAddress", {})
+        attendees.append({
+            "name": addr.get("name", ""),
+            "email": addr.get("address", ""),
+            "type": a.get("type", "required"),
+            "response": a.get("status", {}).get("response", "none"),
+        })
+    location = evt.get("location", {}) or {}
+    return {
+        "id": evt.get("id", ""),
+        "subject": evt.get("subject", "(no subject)"),
+        "start": evt.get("start", {}).get("dateTime", ""),
+        "end": evt.get("end", {}).get("dateTime", ""),
+        "timezone": evt.get("start", {}).get("timeZone", ""),
+        "isAllDay": evt.get("isAllDay", False),
+        "location": location.get("displayName", ""),
+        "organizer": evt.get("organizer", {}).get("emailAddress", {}).get("address", ""),
+        "isOnlineMeeting": evt.get("isOnlineMeeting", False),
+        "onlineMeetingUrl": evt.get("onlineMeeting", {}).get("joinUrl") if evt.get("onlineMeeting") else None,
+        "responseStatus": evt.get("responseStatus", {}).get("response", "none"),
+        "attendees": attendees,
+        "bodyPreview": evt.get("bodyPreview", ""),
+    }
+
+
+@mcp_server.tool()
+async def list_calendar_events(
+    days_ahead: int = 7,
+    days_behind: int = 0,
+    count: int = 25,
+) -> str:
+    """List calendar events in a time window around now.
+
+    Args:
+        days_ahead: How many days into the future to include (default 7)
+        days_behind: How many days into the past to include (default 0, i.e. only future)
+        count: Max events to return (max 50, default 25)
+    """
+    token = _get_token()
+    count = min(count, 50)
+    now = datetime.now(timezone.utc)
+    start = (now.replace(hour=0, minute=0, second=0, microsecond=0)
+             - timedelta(days=days_behind)).isoformat().replace("+00:00", "Z")
+    end = (now + timedelta(days=days_ahead)).isoformat().replace("+00:00", "Z")
+    params = {
+        "startDateTime": start,
+        "endDateTime": end,
+        "$top": count,
+        "$orderby": "start/dateTime asc",
+        "$select": "id,subject,start,end,location,organizer,attendees,isAllDay,isOnlineMeeting,onlineMeeting,responseStatus,bodyPreview",
+    }
+    # calendarView expands recurring instances; better than /events for "what's on my schedule"
+    data = await _graph_get(token, "/me/calendarView", params)
+    events = [_format_event(e) for e in data.get("value", [])]
+    return json.dumps(events, indent=2)
+
+
+@mcp_server.tool()
+async def search_calendar_events(query: str, count: int = 25) -> str:
+    """Search calendar events by subject / body / attendee. Returns recent matches.
+
+    Use this for 'when is my meeting with X' or 'find the offsite event'.
+
+    Args:
+        query: Search text (matches subject, body, attendees)
+        count: Max results (max 50, default 25)
+    """
+    token = _get_token()
+    count = min(count, 50)
+    params = {
+        "$search": f'"{query}"',
+        "$top": count,
+        "$select": "id,subject,start,end,location,organizer,attendees,isAllDay,isOnlineMeeting,onlineMeeting,responseStatus,bodyPreview",
+    }
+    # /me/events with $search requires a ConsistencyLevel header? Actually Outlook
+    # personal endpoints accept $search without it. If we ever hit issues, add:
+    #   headers={"ConsistencyLevel": "eventual"}
+    data = await _graph_get(token, "/me/events", params)
+    events = [_format_event(e) for e in data.get("value", [])]
+    return json.dumps(events, indent=2)
+
+
+@mcp_server.tool()
+async def get_calendar_event(event_id: str) -> str:
+    """Get full details of a single calendar event by ID.
+
+    Args:
+        event_id: Event ID (from list_calendar_events or search_calendar_events)
+    """
+    token = _get_token()
+    data = await _graph_get(token, f"/me/events/{event_id}")
+    evt = _format_event(data)
+    # Add full body for single-event fetch
+    body = data.get("body", {})
+    if body:
+        evt["bodyType"] = body.get("contentType", "html")
+        evt["body"] = body.get("content", "")
+    return json.dumps(evt, indent=2)
 
 
 # ---------------------------------------------------------------------------
