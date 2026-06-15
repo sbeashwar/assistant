@@ -84,6 +84,10 @@ python -m venv C:\git\venvs\outlook-email
 C:\git\venvs\outlook-email\Scripts\python.exe -m pip install --upgrade pip
 C:\git\venvs\outlook-email\Scripts\python.exe -m pip install `
   msal requests mcp pydantic httpx python-dotenv
+
+python -m venv C:\git\venvs\stocks
+C:\git\venvs\stocks\Scripts\python.exe -m pip install --upgrade pip
+C:\git\venvs\stocks\Scripts\python.exe -m pip install mcp httpx
 ```
 
 ### Phase 5 — Restore secrets (NOT in this repo)
@@ -177,6 +181,7 @@ notepad C:\Users\$env:USERNAME\OneDrive\Assistant\notes\worklog.md
 | Path                            | What it is                                              |
 | ------------------------------- | ------------------------------------------------------- |
 | `mcp-servers/outlook-email/`    | Python MSAL+Graph MCP server: mail tools (list_inbox, search_email, send_email, …) + calendar tools (list_calendar_events, search_calendar_events, get_calendar_event). 11 tools total. config.json holds public client_id only. |
+| `mcp-servers/stocks/`           | Python MCP server wrapping the aisuperapp `/api/stocks/*` routes. Gives the chat live quotes, fundamentals, news, options chains, watchlist, and sectors — same data the PWA stocks page shows. 7 tools. Requires Next.js on localhost:3000. |
 | `mcp-servers/reminders/`        | Hourly proactive-reminder scanner. For each `notes/reminders/*.md` with `status: active`, spawns `claude -p` to judge whether the trigger condition is met. Fires Web Push on `fired=true`. |
 | `local-tool-server/`            | Express server on :3100 (file/command tools) + `keep-alive.ps1` that restarts Tailscale, the tool server, and Next.js every 30 minutes. |
 | `scheduled-tasks/register.ps1`  | Idempotent user-scope task registration (AssistantKeepAlive + RemindersScanner). |
